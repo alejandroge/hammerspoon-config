@@ -14,6 +14,7 @@ end)
 require("windows")
 require("clipboard-tool")
 require("app-launcher")
+require("quick-search")
 
 hyper:bind({}, "R", function()
   hyper.triggered = true
