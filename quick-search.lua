@@ -10,7 +10,8 @@ hyper:bind({}, "F", function()
   local siteChoices = {
     { title = "ChatGPT", url = "https://chat.openai.com/?q=" },
     { title = "Perplexity", url = "https://www.perplexity.ai/?q=" },
-    { title = "Google", url = "https://www.google.com/search?q=" }
+    { title = "Google", url = "https://www.google.com/search?q=" },
+    { title = "Rails docs", url = "https://api.rubyonrails.org/v7.0.8/?q=" }
   }
 
   -- Create the chooser
