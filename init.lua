@@ -11,10 +11,11 @@ hyper:bind({}, "L", function()
   hyper.triggered = true
 end)
 
-require("windows")
-require("clipboard-tool")
 require("app-launcher")
+require("clipboard-tool")
 require("quick-search")
+require("text-transformation")
+require("windows")
 
 hyper:bind({}, "R", function()
   hyper.triggered = true
