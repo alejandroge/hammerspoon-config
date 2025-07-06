@@ -10,6 +10,8 @@
 local eventtap = require("hs.eventtap")
 local keycodes = require("hs.keycodes")
 
+local secrets = dofile(os.getenv("HOME") .. "/.hammerspoon/secrets.lua")
+
 local function toRandomCase(str)
     local result = ""
     for i = 1, #str do
@@ -33,6 +35,8 @@ local function tryTransform(buffer)
     local patterns = {
         upper = function(s) return s:upper() end,
         random = toRandomCase,
+        email = function() return secrets.email end,
+        address = function() return secrets.address end,
     }
 
     for key, fn in pairs(patterns) do
