@@ -34,3 +34,16 @@ hyper:bind({}, "Down", function()
   local win = hs.window.focusedWindow()
   win:minimize()
 end)
+
+-- move to the next screen
+hyper:bind({}, "M", function()
+  hyper.triggered = true
+  local win = hs.window.focusedWindow()
+  if not win then return end
+
+  local nextScreen = win:screen():next()
+  if nextScreen then
+    local max = nextScreen:frame()
+    win:setFrame(max)
+  end
+end)

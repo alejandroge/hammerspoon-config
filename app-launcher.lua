@@ -52,9 +52,11 @@ end
 
 appLauncherShortcuts = {
   {"C", "Ghostty"},
+  {"V", "RubyMine"},
   {"S", "Slack"},
   {"B", "Google Chrome"},
   {"J", "Spotify"},
+  {"O", "Obsidian"},
 }
 
 for i,shortcut in ipairs(appLauncherShortcuts) do
