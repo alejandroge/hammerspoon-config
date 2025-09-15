@@ -50,13 +50,24 @@ local function launchOrFocusOrRotate(app)
   end
 end
 
-appLauncherShortcuts = {
-  {"C", "Ghostty"},
-  {"V", "RubyMine"},
-  {"S", "Slack"},
-  {"B", "Google Chrome"},
-  {"J", "Spotify"},
-  {"O", "Obsidian"},
+App = readOnlyTable({
+    Browser = "Google Chrome",
+    PersonalBrowser = "Vivaldi",
+    IDE = "RubyMine",
+    Music = "Spotify",
+    Notes = "Obsidian",
+    Slack = "Slack",
+    Terminal = "Ghostty",
+})
+
+local appLauncherShortcuts = {
+    {"C", App.Terminal},
+    {"V", App.IDE},
+    {"S", App.Slack},
+    {"B", App.Browser},
+    {"P", App.PersonalBrowser},
+    {"J", App.Music},
+    {"O", App.Notes},
 }
 
 for i,shortcut in ipairs(appLauncherShortcuts) do
