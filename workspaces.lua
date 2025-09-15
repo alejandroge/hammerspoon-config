@@ -52,9 +52,52 @@ function updateMenubar()
     end
 end
 
+function applyLayoutForWorkspace(workspace)
+  if currentWorkspace == Workspace.LaptopOnly or currentWorkspace == Workspace.Unknown then
+    return -- No layout needed
+  end
+
+  local primaryScreen = hs.screen.primaryScreen()
+  local secondaryScreen = nil
+
+  -- Find another screen that isn't the primary
+  for _, screen in ipairs(hs.screen.allScreens()) do
+    if screen:id() ~= primaryScreen:id() then
+      secondaryScreen = screen
+      break
+    end
+  end
+
+  if not secondaryScreen then return end
+
+  -- Apps to move to primary
+  local primaryApps = { App.Terminal, App.Browser, App.IDE, App.Notes }
+  local secondaryApps = { App.Music, App.Slack }
+
+  for _, appName in ipairs(primaryApps) do
+    moveAppToScreen(appName, primaryScreen)
+  end
+
+  for _, appName in ipairs(secondaryApps) do
+    moveAppToScreen(appName, secondaryScreen)
+  end
+end
+
+function moveAppToScreen(appName, targetScreen)
+  local app = hs.application.get(appName)
+  if not app then return end -- App not running
+
+  for _, win in ipairs(app:allWindows()) do
+    if win:isStandard() then
+      win:moveToScreen(targetScreen)
+    end
+  end
+end
+
 function initWorkspaces()
     detectAndSaveWorkspace()
     updateMenubar()
+    applyLayoutForWorkspace()
 end
 
 initWorkspaces()
