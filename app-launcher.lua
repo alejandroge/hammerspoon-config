@@ -57,17 +57,16 @@ App = readOnlyTable({
     Music = "Spotify",
     Notes = "Obsidian",
     Slack = "Slack",
-    Terminal = "Ghostty",
+    Terminal = "iTerm",
 })
 
 local appLauncherShortcuts = {
     {"C", App.Terminal},
-    {"V", App.IDE},
     {"S", App.Slack},
     {"B", App.Browser},
     {"P", App.PersonalBrowser},
     {"J", App.Music},
-    {"O", App.Notes},
+    {"N", App.Notes},
 }
 
 for i,shortcut in ipairs(appLauncherShortcuts) do
