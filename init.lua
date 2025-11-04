@@ -13,6 +13,7 @@ end)
 
 require("app-launcher")
 require("clipboard-tool")
+require("glab-toggl-track")
 require("quick-search")
 require("text-transformation")
 require("windows")
