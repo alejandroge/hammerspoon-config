@@ -32,7 +32,43 @@ local http   = hs.http
 local base64 = hs.base64
 local chooser = hs.chooser
 local alert  = hs.alert
+local menubar = hs.menubar
 local log    = hs.logger.new("GlabToggl", "info")
+
+obj._statusItem = nil
+obj._currentTimerDescription = nil
+
+local function ensureStatusItem(self)
+    if not self._statusItem then
+        self._statusItem = menubar.new()
+    end
+    return self._statusItem
+end
+
+function obj:_updateStatusDisplay()
+    local item = ensureStatusItem(self)
+    if not item then return end
+
+    if self._currentTimerDescription and self._currentTimerDescription ~= "" then
+        local tooltip = string.format("Tracking: %s", self._currentTimerDescription)
+        item:setTitle("Toggl: tracking")
+        item:setTooltip(tooltip)
+        item:setMenu({
+            { title = self._currentTimerDescription, disabled = true },
+        })
+    else
+        item:setTitle("Toggl: idle")
+        item:setTooltip("No GlabToggl timer running")
+        item:setMenu({
+            { title = "No timer running", disabled = true },
+        })
+    end
+end
+
+function obj:_setRunningDescription(desc)
+    self._currentTimerDescription = desc
+    self:_updateStatusDisplay()
+end
 
 local function L(cfg, msg)
     log.i((cfg.logPrefix or "") .. msg)
@@ -123,7 +159,7 @@ local function fetchIssues(cfg, cb)
     getPage()
 end
 
-local function startTogglTimer(cfg, desc, projectPath)
+local function startTogglTimer(self, cfg, desc)
     if not cfg.togglWorkspaceId then
         alert.show("Missing TOGGL_WORKSPACE_ID")
         return
@@ -150,7 +186,7 @@ local function startTogglTimer(cfg, desc, projectPath)
     local body = json.encode(bodyTbl, true)
     http.doAsyncRequest(url, "POST", body, headers, function(status, resp, _)
         if status >= 200 and status < 300 then
-            alert.show("Toggl timer started")
+            self:_setRunningDescription(desc)
             L(cfg, "Started: " .. (desc or ""))
         else
             alert.show("Toggl error " .. tostring(status))
@@ -176,8 +212,7 @@ function obj:start()
             if not choice then return end
             local desc = string.format("%s #%s", choice.text, tostring(choice.iid or ""))
 
-            alert.show("Starting Toggl timer for: " .. desc)
-            startTogglTimer(cfg, desc)
+            startTogglTimer(self, cfg, desc)
             if cfg.copyUrlOnSelect and choice.url then hs.pasteboard.setContents(choice.url) end
         end)
 
@@ -202,18 +237,22 @@ function obj:stopCurrent()
         local running = json.decode(resp) or nil
         if not running or running.duration >= 0 then alert.show("No running entry"); return end
 
-        alert.show("Stopping: " .. (running.description or ""))
         local stopUrl = (
         "https://api.track.toggl.com/api/v9/workspaces/%s/time_entries/%s/stop"
         ):format(cfg.togglWorkspaceId, running.id)
 
+        local spoon = self
         http.doAsyncRequest(
         stopUrl,
         "PATCH",
         "{}",
         {["Authorization"]=auth, ["Content-Type"]="application/json"},
         function(st, _, _)
-            if st >= 200 and st < 300 then alert.show("Toggl stopped") else alert.show("Stop failed " .. st) end
+            if st >= 200 and st < 300 then
+                spoon:_setRunningDescription(nil)
+            else
+                alert.show("Stop failed " .. st)
+            end
         end
         )
     end)
@@ -227,5 +266,7 @@ function obj:bindHotkeys(mapping)
     hs.spoons.bindHotkeysToSpec(spec, mapping or {})
     return self
 end
+
+obj:_setRunningDescription(nil)
 
 return obj
