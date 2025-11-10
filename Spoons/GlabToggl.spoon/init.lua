@@ -21,6 +21,8 @@ obj.config = {
     billable          = false,
     copyUrlOnSelect   = true,                           -- copy URL to clipboard
     logPrefix         = "[GlabToggl] ",
+    issuesCacheTTL    = 3600,                           -- seconds; 0 disables cache expiration
+    issuesCacheKey    = obj.name .. ".issuesCache",
 }
 
 ----------------------------------------------------------------
@@ -33,6 +35,7 @@ local base64 = hs.base64
 local chooser = hs.chooser
 local alert  = hs.alert
 local menubar = hs.menubar
+local settings = hs.settings
 local log    = hs.logger.new("GlabToggl", "info")
 
 obj._statusItem = nil
@@ -115,12 +118,57 @@ local function parseIssues(raw)
     return choices
 end
 
+local function cacheKey(cfg)
+    return cfg.issuesCacheKey or (obj.name .. ".issuesCache")
+end
+
+local function saveIssuesCache(cfg, raw)
+    local key = cacheKey(cfg)
+    local ok, err = pcall(function()
+        settings.set(key, {
+            raw = raw,
+            fetchedAt = os.time(),
+        })
+    end)
+    if not ok then L(cfg, "Failed to persist issues cache: " .. tostring(err)) end
+end
+
+local function cachedIssuesRaw(cfg)
+    local key = cacheKey(cfg)
+    local ok, entry = pcall(function() 
+        return settings.get(key)
+    end)
+
+    if not ok then
+        L(cfg, "Failed to read issues cache: " .. tostring(entry))
+        return nil
+    end
+    if type(entry) ~= "table" or type(entry.raw) ~= "string" then return nil end
+
+    local ttl = cfg.issuesCacheTTL
+    local isFresh = true
+    if ttl and ttl > 0 and entry.fetchedAt then
+        local age = os.time() - (entry.fetchedAt or 0)
+        isFresh = age <= ttl
+    end
+
+    return entry.raw, isFresh
+end
+
+local function shouldFetchIssues(cachedRaw, isFresh)
+    if not cachedRaw then return true end
+    if isFresh == nil then return true end
+    return not isFresh
+end
+
 local function parseInt(h) return (h and h ~= "" and tonumber(h)) or nil end
 
-local function fetchIssues(cfg, cb)
+local function fetchIssues(cfg, onSuccess, onError)
     local auth = gitlabAuthHeaders(cfg)
     if not auth then
-        alert.show("Missing GITLAB_TOKEN")
+        local msg = "Missing GITLAB_TOKEN"
+        alert.show(msg)
+        if onError then onError(msg) end
         return
     end
 
@@ -142,17 +190,23 @@ local function fetchIssues(cfg, cb)
         ["Authorization"] = auth,
     }
 
+    local function reportError(status, body)
+        local msg = "GitLab API error " .. tostring(status)
+        alert.show(msg)
+        L(cfg, ("%s body: %s"):format(msg, body or "(nil)"))
+        if onError then onError(msg) end
+    end
+
     local function getPage()
         local full = url .. "?" .. table.concat(qs, "&")
         hs.http.asyncGet(full, headers, function(status, body, headers)
             if status < 200 or status >= 300 then
-                hs.alert.show("GitLab API error " .. tostring(status))
-                L(cfg, ("GitLab error %s body: %s"):format(status, body or "(nil)"))
+                reportError(status, body)
                 return
             end
             local chunk = hs.json.decode(body) or {}
             for _, it in ipairs(chunk) do table.insert(results, it) end
-            cb(hs.json.encode(results)) -- reuse existing parseIssues(jsonString)
+            if onSuccess then onSuccess(hs.json.encode(results)) end -- reuse existing parseIssues(jsonString)
         end)
     end
 
@@ -205,21 +259,58 @@ end
 
 function obj:start()
     local cfg = self.config
-    fetchIssues(cfg, function(raw)
-        local choices = parseIssues(raw)
+    local cachedRaw, cacheFresh = cachedIssuesRaw(cfg)
+    local needFetch = shouldFetchIssues(cachedRaw, cacheFresh)
+    local cachedChoices = cachedRaw and parseIssues(cachedRaw) or nil
 
-        local c = chooser.new(function(choice)
-            if not choice then return end
-            local desc = string.format("%s #%s", choice.text, tostring(choice.iid or ""))
+    if cachedRaw then
+        if cacheFresh then
+            L(cfg, "Using cached GitLab issues (fresh)")
+        else
+            L(cfg, "Using cached GitLab issues (stale, refreshing)")
+        end
+    else
+        L(cfg, "No cached GitLab issues found; fetching latest")
+    end
 
-            startTogglTimer(self, cfg, desc)
-            if cfg.copyUrlOnSelect and choice.url then hs.pasteboard.setContents(choice.url) end
-        end)
+    local function statusChoice(text, sub)
+        return { text = text, subText = sub or "", _status = true }
+    end
 
-        c:placeholderText("Select a GitLab issue")
-        c:choices(choices)
-        c:show()
+    local c = chooser.new(function(choice)
+        if not choice or choice._status then return end
+        local desc = string.format("%s #%s", choice.text, tostring(choice.iid or ""))
+
+        startTogglTimer(self, cfg, desc)
+        if cfg.copyUrlOnSelect and choice.url then hs.pasteboard.setContents(choice.url) end
     end)
+
+    c:placeholderText("Select a GitLab issue")
+    if cachedChoices then
+        if #cachedChoices > 0 then
+            c:choices(cachedChoices)
+        else
+            c:choices({ statusChoice("No assigned GitLab issues", cacheFresh and "Cached results" or "Refreshing…") })
+        end
+    else
+        c:choices({ statusChoice("Loading GitLab issues…", "Fetching latest data") })
+    end
+    c:show()
+
+    if needFetch then
+        fetchIssues(cfg, function(raw)
+            saveIssuesCache(cfg, raw)
+            local freshChoices = parseIssues(raw)
+            if #freshChoices > 0 then
+                c:choices(freshChoices)
+            else
+                c:choices({ statusChoice("No assigned GitLab issues", "Just refreshed") })
+            end
+        end, function(err)
+            if cachedChoices and #cachedChoices > 0 then return end
+            c:choices({ statusChoice("Unable to load GitLab issues", err or "Request failed") })
+        end)
+    end
 end
 
 function obj:stopCurrent()
