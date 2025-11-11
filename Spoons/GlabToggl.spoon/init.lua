@@ -34,14 +34,14 @@ local menubar = hs.menubar
 
 local logger = hs.logger.new("GlabToggl", "info")
 
-obj._statusItem = nil
+obj._menubarItem = nil
 obj._currentTimerDescription = nil
 
 local function ensureStatusItem(self)
-    if not self._statusItem then
-        self._statusItem = menubar.new()
+    if not self._menubarItem then
+        self._menubarItem = menubar.new()
     end
-    return self._statusItem
+    return self._menubarItem
 end
 
 function obj:_updateStatusDisplay()
@@ -50,13 +50,13 @@ function obj:_updateStatusDisplay()
 
     if self._currentTimerDescription and self._currentTimerDescription ~= "" then
         local tooltip = string.format("Tracking: %s", self._currentTimerDescription)
-        item:setTitle("Toggl: tracking")
+        item:setTitle("GlabToggl: tracking")
         item:setTooltip(tooltip)
         item:setMenu({
             { title = self._currentTimerDescription, disabled = true },
         })
     else
-        item:setTitle("Toggl: idle")
+        item:setTitle("GlabToggl: idle")
         item:setTooltip("No GlabToggl timer running")
         item:setMenu({
             { title = "No timer running", disabled = true },
@@ -245,12 +245,52 @@ local function startTogglTimer(self, cfg, desc)
     end)
 end
 
+local function getConfigErrors(cfg)
+    local errors = {}
+    if not cfg.togglApiToken or cfg.togglApiToken == "" then
+        table.insert(errors, "togglApiToken is required")
+    end
+
+    if not cfg.togglWorkspaceId or cfg.togglWorkspaceId == "" then
+        table.insert(errors, "togglWorkspaceId is required")
+    end
+
+    if not cfg.gitlabToken or cfg.gitlabToken == "" then
+        table.insert(errors, "gitlabToken is required")
+    end
+    return errors
+end
+
 ----------------------------------------------------------------
 -- Public API
 ----------------------------------------------------------------
 function obj:configure(o)
     for k,v in pairs(o or {}) do self.config[k] = v end
     return self
+end
+
+function obj:initialize()
+    self._menubarItem = menubar.new()
+
+    local errors = getConfigErrors(self.config)
+    if #errors > 0 then
+        self._menubarItem:setTitle("GlabToggl: ⚠")
+        self._menubarItem:setTooltip("Some issues were found in the GlabToggl configuration")
+
+        local menuItems = {}
+        for _, err in ipairs(errors) do
+            logger.e("Configuration error: " .. err)
+            table.insert(menuItems, { title = err, disabled = true })
+        end
+
+        table.insert(menuItems, { title = "-" }) -- separator
+        table.insert(menuItems, { title = "Please update the configuration", disabled = true })
+
+        self._menubarItem:setMenu(menuItems)
+        return
+    end
+
+    self:_setRunningDescription(nil)
 end
 
 function obj:start()
@@ -353,7 +393,5 @@ function obj:bindHotkeys(mapping)
     hs.spoons.bindHotkeysToSpec(spec, mapping or {})
     return self
 end
-
-obj:_setRunningDescription(nil)
 
 return obj

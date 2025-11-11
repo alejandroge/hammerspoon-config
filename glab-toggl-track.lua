@@ -11,6 +11,7 @@ spoon.GlabToggl:configure({
     run  = {{"cmd", "alt", "ctrl"}, "I"},
     stop = {{"cmd", "alt", "ctrl"}, "O"},
 })
+:initialize()
 
 hyper:bind({}, "I", function()
     hyper.triggered = true
