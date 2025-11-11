@@ -13,30 +13,26 @@ local secrets = dofile(os.getenv("HOME") .. "/.hammerspoon/secrets.lua")
 -- Defaults (override via obj:configure({...}) in init.lua)
 ----------------------------------------------------------------
 obj.config = {
-    togglApiToken     = secrets.togglApiToken,
-    togglWorkspaceId  = secrets.togglWorkspaceId,
-    gitlabToken       = secrets.gitlabToken,
+    togglApiToken     = "",
+    togglWorkspaceId  = "",
+    gitlabToken       = "",
     gitlabBase        = "https://gitlab.com/api/v4",
-    createdWith       = "hammerspoon",
-    billable          = false,
-    copyUrlOnSelect   = true,                           -- copy URL to clipboard
-    logPrefix         = "[GlabToggl] ",
-    issuesCacheTTL    = 3600,                           -- seconds; 0 disables cache expiration
-    issuesCacheKey    = obj.name .. ".issuesCache",
+    -- copy gitlab URL to clipboard, after selecting an issue to start a timer for
+    copyUrlOnSelect   = true,
+    -- seconds; 0 disables cache expiration
+    issuesCacheTTL    = 3600,
 }
 
 ----------------------------------------------------------------
 -- Internals
 ----------------------------------------------------------------
-local json   = hs.json
-local task   = hs.task
 local http   = hs.http
 local base64 = hs.base64
 local chooser = hs.chooser
 local alert  = hs.alert
 local menubar = hs.menubar
-local settings = hs.settings
-local log    = hs.logger.new("GlabToggl", "info")
+
+local logger = hs.logger.new("GlabToggl", "info")
 
 obj._statusItem = nil
 obj._currentTimerDescription = nil
@@ -73,26 +69,26 @@ function obj:_setRunningDescription(desc)
     self:_updateStatusDisplay()
 end
 
-local function L(cfg, msg)
-    log.i((cfg.logPrefix or "") .. msg)
-end
-
 local function iso_now_utc()
     return os.date("!%Y-%m-%dT%H:%M:%S.000Z")
 end
 
 local function togglAuthHeader(cfg)
     if not cfg.togglApiToken then return nil end
+    if cfg.togglApiToken == "" then return nil end
+
     return "Basic " .. base64.encode(cfg.togglApiToken .. ":api_token")
 end
 
 local function gitlabAuthHeaders(cfg)
     if not cfg.gitlabToken then return nil end
+    if cfg.gitlabToken == "" then return nil end
+
     return "Bearer " .. cfg.gitlabToken
 end
 
 local function parseIssues(raw)
-    local decoded = json.decode(raw) or {}
+    local decoded = hs.json.decode(raw) or {}
     local choices = {}
     for _, it in ipairs(decoded) do
         local title = it.title or "(no title)"
@@ -125,22 +121,22 @@ end
 local function saveIssuesCache(cfg, raw)
     local key = cacheKey(cfg)
     local ok, err = pcall(function()
-        settings.set(key, {
+        hs.settings.set(key, {
             raw = raw,
             fetchedAt = os.time(),
         })
     end)
-    if not ok then L(cfg, "Failed to persist issues cache: " .. tostring(err)) end
+    if not ok then logger.i("Failed to persist issues cache: " .. tostring(err)) end
 end
 
 local function cachedIssuesRaw(cfg)
     local key = cacheKey(cfg)
     local ok, entry = pcall(function() 
-        return settings.get(key)
+        return hs.settings.get(key)
     end)
 
     if not ok then
-        L(cfg, "Failed to read issues cache: " .. tostring(entry))
+        logger.i("Failed to read issues cache: " .. tostring(entry))
         return nil
     end
     if type(entry) ~= "table" or type(entry.raw) ~= "string" then return nil end
@@ -193,7 +189,7 @@ local function fetchIssues(cfg, onSuccess, onError)
     local function reportError(status, body)
         local msg = "GitLab API error " .. tostring(status)
         alert.show(msg)
-        L(cfg, ("%s body: %s"):format(msg, body or "(nil)"))
+        logger.i(("%s body: %s"):format(msg, body or "(nil)"))
         if onError then onError(msg) end
     end
 
@@ -231,20 +227,20 @@ local function startTogglTimer(self, cfg, desc)
         start         = iso_now_utc(),
         duration      = -1, -- running entry
         workspace_id  = tonumber(cfg.togglWorkspaceId),
-        billable      = cfg.billable,
+        billable      = false,
     }
     local headers = {
         ["Content-Type"]  = "application/json",
         ["Authorization"] = auth,
     }
-    local body = json.encode(bodyTbl, true)
+    local body = hs.json.encode(bodyTbl, true)
     http.doAsyncRequest(url, "POST", body, headers, function(status, resp, _)
         if status >= 200 and status < 300 then
             self:_setRunningDescription(desc)
-            L(cfg, "Started: " .. (desc or ""))
+            logger.i("Started: " .. (desc or ""))
         else
             alert.show("Toggl error " .. tostring(status))
-            L(cfg, "Response: " .. (resp or ""))
+            logger.i("Response: " .. (resp or ""))
         end
     end)
 end
@@ -265,12 +261,12 @@ function obj:start()
 
     if cachedRaw then
         if cacheFresh then
-            L(cfg, "Using cached GitLab issues (fresh)")
+            logger.i("Using cached GitLab issues (fresh)")
         else
-            L(cfg, "Using cached GitLab issues (stale, refreshing)")
+            logger.i("Using cached GitLab issues (stale, refreshing)")
         end
     else
-        L(cfg, "No cached GitLab issues found; fetching latest")
+        logger.i("No cached GitLab issues found; fetching latest")
     end
 
     local function statusChoice(text, sub)
@@ -325,7 +321,7 @@ function obj:stopCurrent()
     http.doAsyncRequest(currentTimeEntryUrl, "GET", nil, headers, function(status, resp, _)
         if status < 200 or status >= 300 then alert.show("Toggl list error " .. status); return end
 
-        local running = json.decode(resp) or nil
+        local running = hs.json.decode(resp) or nil
         if not running or running.duration >= 0 then alert.show("No running entry"); return end
 
         local stopUrl = (
