@@ -261,6 +261,43 @@ local function getConfigErrors(cfg)
     return errors
 end
 
+local function getGitlabIssues(cfg)
+    local cachedRaw, cacheFresh = cachedIssuesRaw(cfg)
+    local needFetch = shouldFetchIssues(cachedRaw, cacheFresh)
+    local cachedChoices = cachedRaw and parseIssues(cachedRaw) or nil
+
+    if cachedRaw then
+        if cacheFresh then
+            logger.i("Using cached GitLab issues (fresh)")
+        else
+            logger.i("Using cached GitLab issues (stale, refreshing)")
+        end
+    end
+
+    if needFetch then
+        logger.i("No cached GitLab issues found; fetching latest")
+
+        local freshChoices = {}
+        fetchIssues(cfg, function(raw)
+            saveIssuesCache(cfg, raw)
+            freshChoices = parseIssues(raw)
+
+            logger.i("fetched....")
+            if #freshChoices <= 0 then
+                logger.i("No assigned GitLab issues", "Just refreshed")
+            end
+        end, function(err)
+            if cachedChoices and #cachedChoices > 0 then return end
+            logger.i("Unable to load GitLab issues", err or "Request failed")
+        end)
+
+        logger.i("returned....")
+        return freshChoices
+    else
+        return cachedChoices
+    end
+end
+
 ----------------------------------------------------------------
 -- Public API
 ----------------------------------------------------------------
@@ -295,19 +332,8 @@ end
 
 function obj:start()
     local cfg = self.config
-    local cachedRaw, cacheFresh = cachedIssuesRaw(cfg)
-    local needFetch = shouldFetchIssues(cachedRaw, cacheFresh)
-    local cachedChoices = cachedRaw and parseIssues(cachedRaw) or nil
 
-    if cachedRaw then
-        if cacheFresh then
-            logger.i("Using cached GitLab issues (fresh)")
-        else
-            logger.i("Using cached GitLab issues (stale, refreshing)")
-        end
-    else
-        logger.i("No cached GitLab issues found; fetching latest")
-    end
+    local gitlabIssuses = getGitlabIssues(cfg)
 
     local function statusChoice(text, sub)
         return { text = text, subText = sub or "", _status = true }
@@ -322,31 +348,13 @@ function obj:start()
     end)
 
     c:placeholderText("Select a GitLab issue")
-    if cachedChoices then
-        if #cachedChoices > 0 then
-            c:choices(cachedChoices)
-        else
-            c:choices({ statusChoice("No assigned GitLab issues", cacheFresh and "Cached results" or "Refreshing…") })
-        end
+    if gitlabIssuses and #gitlabIssuses > 0 then
+        c:choices(gitlabIssuses)
     else
-        c:choices({ statusChoice("Loading GitLab issues…", "Fetching latest data") })
+        c:choices({ statusChoice("No assigned GitLab issues") })
     end
-    c:show()
 
-    if needFetch then
-        fetchIssues(cfg, function(raw)
-            saveIssuesCache(cfg, raw)
-            local freshChoices = parseIssues(raw)
-            if #freshChoices > 0 then
-                c:choices(freshChoices)
-            else
-                c:choices({ statusChoice("No assigned GitLab issues", "Just refreshed") })
-            end
-        end, function(err)
-            if cachedChoices and #cachedChoices > 0 then return end
-            c:choices({ statusChoice("Unable to load GitLab issues", err or "Request failed") })
-        end)
-    end
+    c:show()
 end
 
 function obj:stopCurrent()
