@@ -118,7 +118,7 @@ local function cacheKey(cfg)
     return cfg.issuesCacheKey or (obj.name .. ".issuesCache")
 end
 
-local function saveIssuesCache(cfg, raw)
+local function saveIssuesToCache(cfg, raw)
     local key = cacheKey(cfg)
     local ok, err = pcall(function()
         hs.settings.set(key, {
@@ -129,49 +129,68 @@ local function saveIssuesCache(cfg, raw)
     if not ok then logger.i("Failed to persist issues cache: " .. tostring(err)) end
 end
 
-local function cachedIssuesRaw(cfg)
-    local key = cacheKey(cfg)
-    local ok, entry = pcall(function() 
-        return hs.settings.get(key)
-    end)
-
-    if not ok then
-        logger.i("Failed to read issues cache: " .. tostring(entry))
-        return nil
-    end
-    if type(entry) ~= "table" or type(entry.raw) ~= "string" then return nil end
-
-    local ttl = cfg.issuesCacheTTL
-    local isFresh = true
-    if ttl and ttl > 0 and entry.fetchedAt then
-        local age = os.time() - (entry.fetchedAt or 0)
-        isFresh = age <= ttl
-    end
-
-    return entry.raw, isFresh
-end
-
-local function shouldFetchIssues(cachedRaw, isFresh)
-    if not cachedRaw then return true end
-    if isFresh == nil then return true end
-    return not isFresh
-end
-
 local function parseInt(h) return (h and h ~= "" and tonumber(h)) or nil end
 
-local function fetchIssues(cfg, onSuccess, onError)
-    local auth = gitlabAuthHeaders(cfg)
+local function startTogglTimer(self, cfg, desc)
+    if not cfg.togglWorkspaceId then
+        alert.show("Missing TOGGL_WORKSPACE_ID")
+        return
+    end
+    local auth = togglAuthHeader(cfg)
     if not auth then
-        local msg = "Missing GITLAB_TOKEN"
-        alert.show(msg)
-        if onError then onError(msg) end
+        alert.show("Missing TOGGL_API_TOKEN")
         return
     end
 
+    local url = ("https://api.track.toggl.com/api/v9/workspaces/%s/time_entries"):format(cfg.togglWorkspaceId)
+    local bodyTbl = {
+        description   = desc,
+        created_with  = cfg.createdWith,
+        start         = iso_now_utc(),
+        duration      = -1, -- running entry
+        workspace_id  = tonumber(cfg.togglWorkspaceId),
+        billable      = false,
+        created_with  = "hammerspoon (GlabToggl)",
+    }
+    local headers = {
+        ["Content-Type"]  = "application/json",
+        ["Authorization"] = auth,
+    }
+    local body = hs.json.encode(bodyTbl, true)
+    http.doAsyncRequest(url, "POST", body, headers, function(status, resp, _)
+        if status >= 200 and status < 300 then
+            self:_setRunningDescription(desc)
+            logger.i("Started: " .. (desc or ""))
+        else
+            alert.show("Toggl error " .. tostring(status))
+            logger.i("Response: " .. (resp or ""))
+        end
+    end)
+end
+
+local function getConfigErrors(cfg)
+    local errors = {}
+
+    if not cfg.togglApiToken or cfg.togglApiToken == "" then
+        table.insert(errors, "togglApiToken is required")
+    end
+
+    if not cfg.togglWorkspaceId or cfg.togglWorkspaceId == "" then
+        table.insert(errors, "togglWorkspaceId is required")
+    end
+
+    if not cfg.gitlabToken or cfg.gitlabToken == "" then
+        table.insert(errors, "gitlabToken is required")
+    end
+
+    return errors
+end
+
+local function fetchIssues(cfg, onSuccess, onError)
+    local auth = gitlabAuthHeaders(cfg)
     local base = cfg.gitlabBase:gsub("/+$","")
     local url  = base .. "/issues"
 
-    -- Build query
     local qs = {
         "state=opened",
         "order_by=updated_at",
@@ -202,99 +221,61 @@ local function fetchIssues(cfg, onSuccess, onError)
             end
             local chunk = hs.json.decode(body) or {}
             for _, it in ipairs(chunk) do table.insert(results, it) end
-            if onSuccess then onSuccess(hs.json.encode(results)) end -- reuse existing parseIssues(jsonString)
+
+            if onSuccess then onSuccess(hs.json.encode(results)) end
         end)
     end
 
     getPage()
 end
 
-local function startTogglTimer(self, cfg, desc)
-    if not cfg.togglWorkspaceId then
-        alert.show("Missing TOGGL_WORKSPACE_ID")
-        return
-    end
-    local auth = togglAuthHeader(cfg)
-    if not auth then
-        alert.show("Missing TOGGL_API_TOKEN")
-        return
-    end
-
-    local url = ("https://api.track.toggl.com/api/v9/workspaces/%s/time_entries"):format(cfg.togglWorkspaceId)
-    local bodyTbl = {
-        description   = desc,
-        created_with  = cfg.createdWith,
-        start         = iso_now_utc(),
-        duration      = -1, -- running entry
-        workspace_id  = tonumber(cfg.togglWorkspaceId),
-        billable      = false,
-    }
-    local headers = {
-        ["Content-Type"]  = "application/json",
-        ["Authorization"] = auth,
-    }
-    local body = hs.json.encode(bodyTbl, true)
-    http.doAsyncRequest(url, "POST", body, headers, function(status, resp, _)
-        if status >= 200 and status < 300 then
-            self:_setRunningDescription(desc)
-            logger.i("Started: " .. (desc or ""))
-        else
-            alert.show("Toggl error " .. tostring(status))
-            logger.i("Response: " .. (resp or ""))
-        end
+local function getCachedIssuesRaw(cfg)
+    local key = cacheKey(cfg)
+    local ok, entry = pcall(function() 
+        return hs.settings.get(key)
     end)
+
+    if not ok then
+        logger.i("Failed to read issues cache: " .. tostring(entry))
+        return nil, true
+    end
+
+    if type(entry) ~= "table" or type(entry.raw) ~= "string" then return nil end
+
+    local ttl = cfg.issuesCacheTTL
+    local isFresh = false
+
+    if ttl and ttl > 0 and entry.fetchedAt then
+        local age = os.time() - (entry.fetchedAt or 0)
+        isFresh = age <= ttl
+    end
+
+    return entry.raw, not isFresh
 end
 
-local function getConfigErrors(cfg)
-    local errors = {}
-    if not cfg.togglApiToken or cfg.togglApiToken == "" then
-        table.insert(errors, "togglApiToken is required")
-    end
+local function getGitlabIssues(cfg, onSuccess)
+    local cachedIssues, shouldFetch = getCachedIssuesRaw(cfg)
 
-    if not cfg.togglWorkspaceId or cfg.togglWorkspaceId == "" then
-        table.insert(errors, "togglWorkspaceId is required")
-    end
+    if shouldFetch then
+        logger.i("No valid cached GitLab issues found; fetching latest")
 
-    if not cfg.gitlabToken or cfg.gitlabToken == "" then
-        table.insert(errors, "gitlabToken is required")
-    end
-    return errors
-end
-
-local function getGitlabIssues(cfg)
-    local cachedRaw, cacheFresh = cachedIssuesRaw(cfg)
-    local needFetch = shouldFetchIssues(cachedRaw, cacheFresh)
-    local cachedChoices = cachedRaw and parseIssues(cachedRaw) or nil
-
-    if cachedRaw then
-        if cacheFresh then
-            logger.i("Using cached GitLab issues (fresh)")
-        else
-            logger.i("Using cached GitLab issues (stale, refreshing)")
-        end
-    end
-
-    if needFetch then
-        logger.i("No cached GitLab issues found; fetching latest")
-
-        local freshChoices = {}
         fetchIssues(cfg, function(raw)
-            saveIssuesCache(cfg, raw)
-            freshChoices = parseIssues(raw)
+            saveIssuesToCache(cfg, raw)
+            local freshChoices = parseIssues(raw)
 
-            logger.i("fetched....")
+            logger.i("fetched...." .. tostring(#freshChoices) .. " issues")
             if #freshChoices <= 0 then
                 logger.i("No assigned GitLab issues", "Just refreshed")
             end
+            onSuccess(freshChoices)
         end, function(err)
             if cachedChoices and #cachedChoices > 0 then return end
             logger.i("Unable to load GitLab issues", err or "Request failed")
         end)
-
-        logger.i("returned....")
-        return freshChoices
     else
-        return cachedChoices
+        logger.i("Using cached GitLab issues")
+        local parsedIssues = cachedIssues and parseIssues(cachedIssues) or nil
+        onSuccess(parsedIssues)
     end
 end
 
@@ -306,7 +287,7 @@ function obj:configure(o)
     return self
 end
 
-function obj:initialize()
+function obj:start()
     self._menubarItem = menubar.new()
 
     local errors = getConfigErrors(self.config)
@@ -330,31 +311,35 @@ function obj:initialize()
     self:_setRunningDescription(nil)
 end
 
-function obj:start()
+function obj:openChooser()
     local cfg = self.config
 
-    local gitlabIssuses = getGitlabIssues(cfg)
+    local gitlabIssues = {}
+    getGitlabIssues(cfg, function(issues)
+        logger.i("returned from getGitlabIssues callback")
+        gitlabIssues = issues or {}
 
-    local function statusChoice(text, sub)
-        return { text = text, subText = sub or "", _status = true }
-    end
+        local function statusChoice(text, sub)
+            return { text = text, subText = sub or "", _status = true }
+        end
 
-    local c = chooser.new(function(choice)
-        if not choice or choice._status then return end
-        local desc = string.format("%s #%s", choice.text, tostring(choice.iid or ""))
+        local c = chooser.new(function(choice)
+            if not choice or choice._status then return end
+            local desc = string.format("%s #%s", choice.text, tostring(choice.iid or ""))
 
-        startTogglTimer(self, cfg, desc)
-        if cfg.copyUrlOnSelect and choice.url then hs.pasteboard.setContents(choice.url) end
+            startTogglTimer(self, cfg, desc)
+            if cfg.copyUrlOnSelect and choice.url then hs.pasteboard.setContents(choice.url) end
+        end)
+
+        c:placeholderText("Select a GitLab issue")
+        if gitlabIssues and #gitlabIssues > 0 then
+            c:choices(gitlabIssues)
+        else
+            c:choices({ statusChoice("No assigned GitLab issues") })
+        end
+
+        c:show()
     end)
-
-    c:placeholderText("Select a GitLab issue")
-    if gitlabIssuses and #gitlabIssuses > 0 then
-        c:choices(gitlabIssuses)
-    else
-        c:choices({ statusChoice("No assigned GitLab issues") })
-    end
-
-    c:show()
 end
 
 function obj:stopCurrent()
@@ -395,8 +380,8 @@ end
 
 function obj:bindHotkeys(mapping)
     local spec = {
-        run  = function() self:start() end,
-        stop = function() self:stopCurrent() end,
+        openChooser = function() self:openChooser() end,
+        stopCurrent = function() self:stopCurrent() end,
     }
     hs.spoons.bindHotkeysToSpec(spec, mapping or {})
     return self

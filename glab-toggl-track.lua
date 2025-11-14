@@ -8,10 +8,10 @@ spoon.GlabToggl:configure({
     gitlabToken         = secrets.gitlabToken,
 })
 :bindHotkeys({
-    run  = {{"cmd", "alt", "ctrl"}, "I"},
-    stop = {{"cmd", "alt", "ctrl"}, "O"},
+    openChooser = {{"cmd", "alt", "ctrl"}, "I"},
+    stopCurrent = {{"cmd", "alt", "ctrl"}, "O"},
 })
-:initialize()
+:start()
 
 hyper:bind({}, "I", function()
     hyper.triggered = true
