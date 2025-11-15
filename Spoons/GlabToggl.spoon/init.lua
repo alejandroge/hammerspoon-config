@@ -26,47 +26,57 @@ obj.config = {
 ----------------------------------------------------------------
 -- Internals
 ----------------------------------------------------------------
-local http   = hs.http
-local base64 = hs.base64
-local chooser = hs.chooser
-local alert  = hs.alert
-local menubar = hs.menubar
-
 local logger = hs.logger.new("GlabToggl", "info")
 
 obj._menubarItem = nil
 obj._currentTimerDescription = nil
+obj._runningGitlabIssue = nil
 
-local function ensureStatusItem(self)
+function obj:_ensureStatusItem()
     if not self._menubarItem then
-        self._menubarItem = menubar.new()
+        self._menubarItem = hs.menubar.new()
     end
     return self._menubarItem
 end
 
-function obj:_updateStatusDisplay()
-    local item = ensureStatusItem(self)
+function obj:_setMenubarItemStatus(runningGitlabIssue)
+    local item = self:_ensureStatusItem()
     if not item then return end
 
-    if self._currentTimerDescription and self._currentTimerDescription ~= "" then
-        local tooltip = string.format("Tracking: %s", self._currentTimerDescription)
-        item:setTitle("GlabToggl: tracking")
-        item:setTooltip(tooltip)
-        item:setMenu({
-            { title = self._currentTimerDescription, disabled = true },
-        })
-    else
+    if not runningGitlabIssue then
         item:setTitle("GlabToggl: idle")
-        item:setTooltip("No GlabToggl timer running")
+        item:setTooltip("No timer running")
+    else
+        local desc = string.format("%s #%s", runningGitlabIssue.text, tostring(runningGitlabIssue.iid or ""))
+
+        item:setTitle("GlabToggl: tracking")
+        item:setTooltip("Tracking: " .. runningGitlabIssue.text)
+    end
+end
+
+function obj:_setMenubarItemIssuesList(gitlabIssues)
+    local item = self:_ensureStatusItem()
+    if not item then return end
+
+    if gitlabIssues and #gitlabIssues > 0 then
+        local menuItems = {}
+        for _, issue in ipairs(gitlabIssues) do
+            table.insert(menuItems, {
+                title = issue.text .. " #" .. tostring(issue.iid or ""),
+                disabled = true,
+            })
+        end
+        item:setMenu(menuItems)
+    else
         item:setMenu({
-            { title = "No timer running", disabled = true },
+            { title = "No assigned GitLab issues", disabled = true },
         })
     end
 end
 
 function obj:_setRunningDescription(desc)
     self._currentTimerDescription = desc
-    self:_updateStatusDisplay()
+    self:_setMenubarItemStatus(desc)
 end
 
 local function iso_now_utc()
@@ -77,7 +87,83 @@ local function togglAuthHeader(cfg)
     if not cfg.togglApiToken then return nil end
     if cfg.togglApiToken == "" then return nil end
 
-    return "Basic " .. base64.encode(cfg.togglApiToken .. ":api_token")
+    return "Basic " .. hs.base64.encode(cfg.togglApiToken .. ":api_token")
+end
+
+local function parseInt(h) return (h and h ~= "" and tonumber(h)) or nil end
+
+local function startTogglTimer(self, cfg, desc, callback)
+    local auth = togglAuthHeader(cfg)
+
+    local url = ("https://api.track.toggl.com/api/v9/workspaces/%s/time_entries"):format(cfg.togglWorkspaceId)
+    local bodyTbl = {
+        description   = desc,
+        created_with  = cfg.createdWith,
+        start         = iso_now_utc(),
+        duration      = -1, -- running entry
+        workspace_id  = tonumber(cfg.togglWorkspaceId),
+        billable      = false,
+        created_with  = "hammerspoon (GlabToggl)",
+    }
+    local headers = {
+        ["Content-Type"]  = "application/json",
+        ["Authorization"] = auth,
+    }
+    local body = hs.json.encode(bodyTbl, true)
+    hs.http.doAsyncRequest(url, "POST", body, headers, function(status, resp, _)
+        if status >= 200 and status < 300 then
+            logger.i("Started: " .. (desc or ""))
+            if callback then callback(true) end
+        else
+            logger.i("Response: " .. (resp or ""))
+            if callback then callback(false) end
+        end
+    end)
+end
+
+local function stopTogglTimer(self, cfg, callback)
+    local auth = togglAuthHeader(cfg)
+
+    local currentTimeEntryUrl = "https://api.track.toggl.com/api/v9/me/time_entries/current"
+    local headers = {
+        ["Authorization"] = auth,
+        ["Content-Type"] = "application/json",
+    }
+
+    hs.http.doAsyncRequest(currentTimeEntryUrl, "GET", nil, headers, function(status, resp, _)
+        if status < 200 or status >= 300 then
+            hs.alert.show("Toggl list error " .. status)
+            logger.e("Failed to get current time entry: " .. tostring(resp))
+            callback(false)
+            return
+        end
+
+        local running = hs.json.decode(resp) or nil
+        if not running or running.duration >= 0 then
+            callback(true)
+            return
+        end
+
+        local stopUrl = (
+            "https://api.track.toggl.com/api/v9/workspaces/%s/time_entries/%s/stop"
+        ):format(cfg.togglWorkspaceId, running.id)
+
+        hs.http.doAsyncRequest(
+            stopUrl,
+            "PATCH",
+            "{}",
+            headers,
+            function(st, _, _)
+                if st >= 200 and st < 300 then
+                    callback(true)
+                else
+                    hs.alert.show("Stop failed " .. st)
+                    logger.e("Failed to stop time entry: " .. tostring(st))
+                    callback(false)
+                end
+            end
+        )
+    end)
 end
 
 local function gitlabAuthHeaders(cfg)
@@ -129,63 +215,6 @@ local function saveIssuesToCache(cfg, raw)
     if not ok then logger.i("Failed to persist issues cache: " .. tostring(err)) end
 end
 
-local function parseInt(h) return (h and h ~= "" and tonumber(h)) or nil end
-
-local function startTogglTimer(self, cfg, desc)
-    if not cfg.togglWorkspaceId then
-        alert.show("Missing TOGGL_WORKSPACE_ID")
-        return
-    end
-    local auth = togglAuthHeader(cfg)
-    if not auth then
-        alert.show("Missing TOGGL_API_TOKEN")
-        return
-    end
-
-    local url = ("https://api.track.toggl.com/api/v9/workspaces/%s/time_entries"):format(cfg.togglWorkspaceId)
-    local bodyTbl = {
-        description   = desc,
-        created_with  = cfg.createdWith,
-        start         = iso_now_utc(),
-        duration      = -1, -- running entry
-        workspace_id  = tonumber(cfg.togglWorkspaceId),
-        billable      = false,
-        created_with  = "hammerspoon (GlabToggl)",
-    }
-    local headers = {
-        ["Content-Type"]  = "application/json",
-        ["Authorization"] = auth,
-    }
-    local body = hs.json.encode(bodyTbl, true)
-    http.doAsyncRequest(url, "POST", body, headers, function(status, resp, _)
-        if status >= 200 and status < 300 then
-            self:_setRunningDescription(desc)
-            logger.i("Started: " .. (desc or ""))
-        else
-            alert.show("Toggl error " .. tostring(status))
-            logger.i("Response: " .. (resp or ""))
-        end
-    end)
-end
-
-local function getConfigErrors(cfg)
-    local errors = {}
-
-    if not cfg.togglApiToken or cfg.togglApiToken == "" then
-        table.insert(errors, "togglApiToken is required")
-    end
-
-    if not cfg.togglWorkspaceId or cfg.togglWorkspaceId == "" then
-        table.insert(errors, "togglWorkspaceId is required")
-    end
-
-    if not cfg.gitlabToken or cfg.gitlabToken == "" then
-        table.insert(errors, "gitlabToken is required")
-    end
-
-    return errors
-end
-
 local function fetchIssues(cfg, onSuccess, onError)
     local auth = gitlabAuthHeaders(cfg)
     local base = cfg.gitlabBase:gsub("/+$","")
@@ -207,8 +236,8 @@ local function fetchIssues(cfg, onSuccess, onError)
 
     local function reportError(status, body)
         local msg = "GitLab API error " .. tostring(status)
-        alert.show(msg)
-        logger.i(("%s body: %s"):format(msg, body or "(nil)"))
+        hs.alert.show(msg)
+        logger.e(("%s body: %s"):format(msg, body or "(nil)"))
         if onError then onError(msg) end
     end
 
@@ -279,6 +308,24 @@ local function getGitlabIssues(cfg, onSuccess)
     end
 end
 
+local function getConfigErrors(cfg)
+    local errors = {}
+
+    if not cfg.togglApiToken or cfg.togglApiToken == "" then
+        table.insert(errors, "togglApiToken is required")
+    end
+
+    if not cfg.togglWorkspaceId or cfg.togglWorkspaceId == "" then
+        table.insert(errors, "togglWorkspaceId is required")
+    end
+
+    if not cfg.gitlabToken or cfg.gitlabToken == "" then
+        table.insert(errors, "gitlabToken is required")
+    end
+
+    return errors
+end
+
 ----------------------------------------------------------------
 -- Public API
 ----------------------------------------------------------------
@@ -288,8 +335,6 @@ function obj:configure(o)
 end
 
 function obj:start()
-    self._menubarItem = menubar.new()
-
     local errors = getConfigErrors(self.config)
     if #errors > 0 then
         self._menubarItem:setTitle("GlabToggl: ⚠")
@@ -308,28 +353,37 @@ function obj:start()
         return
     end
 
-    self:_setRunningDescription(nil)
+    self._runningGitlabIssue = nil
+    self:_setMenubarItemStatus(nil)
 end
 
 function obj:openChooser()
     local cfg = self.config
 
     local gitlabIssues = {}
-    getGitlabIssues(cfg, function(issues)
-        logger.i("returned from getGitlabIssues callback")
-        gitlabIssues = issues or {}
-
+    getGitlabIssues(cfg, function(gitlabIssues)
         local function statusChoice(text, sub)
             return { text = text, subText = sub or "", _status = true }
         end
 
-        local c = chooser.new(function(choice)
-            if not choice or choice._status then return end
-            local desc = string.format("%s #%s", choice.text, tostring(choice.iid or ""))
+        local c = hs.chooser.new(function(selectedGitlabIssue)
+            if not selectedGitlabIssue or selectedGitlabIssue._status then return end
+            local desc = string.format("%s #%s", selectedGitlabIssue.text, tostring(selectedGitlabIssue.iid or ""))
 
-            startTogglTimer(self, cfg, desc)
-            if cfg.copyUrlOnSelect and choice.url then hs.pasteboard.setContents(choice.url) end
+            startTogglTimer(self, cfg, desc, function(success)
+                obj._runningGitlabIssue = selectedGitlabIssue
+
+                if success then
+                    if cfg.copyUrlOnSelect and selectedGitlabIssue.url then
+                        hs.pasteboard.setContents(selectedGitlabIssue.url)
+                    end
+
+                    self:_setMenubarItemStatus(selectedGitlabIssue)
+                end
+            end)
         end)
+
+        self:_setMenubarItemIssuesList(gitlabIssues)
 
         c:placeholderText("Select a GitLab issue")
         if gitlabIssues and #gitlabIssues > 0 then
@@ -344,37 +398,11 @@ end
 
 function obj:stopCurrent()
     local cfg = self.config
-    local auth = togglAuthHeader(cfg)
-    if not auth then alert.show("Missing TOGGL_API_TOKEN"); return end
-    if not cfg.togglWorkspaceId then alert.show("Missing TOGGL_WORKSPACE_ID"); return end
-
-    local headers = { ["Authorization"] = auth }
-    local currentTimeEntryUrl = "https://api.track.toggl.com/api/v9/me/time_entries/current"
-
-    http.doAsyncRequest(currentTimeEntryUrl, "GET", nil, headers, function(status, resp, _)
-        if status < 200 or status >= 300 then alert.show("Toggl list error " .. status); return end
-
-        local running = hs.json.decode(resp) or nil
-        if not running or running.duration >= 0 then alert.show("No running entry"); return end
-
-        local stopUrl = (
-        "https://api.track.toggl.com/api/v9/workspaces/%s/time_entries/%s/stop"
-        ):format(cfg.togglWorkspaceId, running.id)
-
-        local spoon = self
-        http.doAsyncRequest(
-        stopUrl,
-        "PATCH",
-        "{}",
-        {["Authorization"]=auth, ["Content-Type"]="application/json"},
-        function(st, _, _)
-            if st >= 200 and st < 300 then
-                spoon:_setRunningDescription(nil)
-            else
-                alert.show("Stop failed " .. st)
-            end
+    stopTogglTimer(self, cfg, function(success)
+        if success then
+            self._runningGitlabIssue = nil
+            self:_setMenubarItemStatus(nil)
         end
-        )
     end)
 end
 

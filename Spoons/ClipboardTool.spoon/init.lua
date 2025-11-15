@@ -95,7 +95,7 @@ obj.deduplicate = true
 --- ClipboardTool.show_in_menubar
 --- Variable
 --- Whether to show a menubar item to open the clipboard history. Defaults to `true`
-obj.show_in_menubar = true
+obj.show_in_menubar = false
 
 --- ClipboardTool.menubar_title
 --- Variable
