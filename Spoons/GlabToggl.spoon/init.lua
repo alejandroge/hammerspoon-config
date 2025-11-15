@@ -7,8 +7,6 @@ obj.author = "Alejandro Guevara <alejandro.guevara.esc@gmail.com>"
 obj.homepage = "local"
 obj.license = "MIT - https://opensource.org/licenses/MIT"
 
-local secrets = dofile(os.getenv("HOME") .. "/.hammerspoon/secrets.lua")
-
 ----------------------------------------------------------------
 -- Defaults (override via obj:configure({...}) in init.lua)
 ----------------------------------------------------------------
@@ -241,21 +239,17 @@ local function fetchIssues(cfg, onSuccess, onError)
         if onError then onError(msg) end
     end
 
-    local function getPage()
-        local full = url .. "?" .. table.concat(qs, "&")
-        hs.http.asyncGet(full, headers, function(status, body, headers)
-            if status < 200 or status >= 300 then
-                reportError(status, body)
-                return
-            end
-            local chunk = hs.json.decode(body) or {}
-            for _, it in ipairs(chunk) do table.insert(results, it) end
+    local full = url .. "?" .. table.concat(qs, "&")
+    hs.http.asyncGet(full, headers, function(status, body, headers)
+        if status < 200 or status >= 300 then
+            reportError(status, body)
+            return
+        end
+        local chunk = hs.json.decode(body) or {}
+        for _, it in ipairs(chunk) do table.insert(results, it) end
 
-            if onSuccess then onSuccess(hs.json.encode(results)) end
-        end)
-    end
-
-    getPage()
+        if onSuccess then onSuccess(hs.json.encode(results)) end
+    end)
 end
 
 local function getCachedIssuesRaw(cfg)
