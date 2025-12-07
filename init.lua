@@ -5,6 +5,7 @@ print(hs.location.get())
 -- setup
 require("hyper-key")
 require("utils")
+require("hs.ipc")
 
 hyper:bind({}, "L", function()
   hs.caffeinate.lockScreen()
