@@ -17,6 +17,7 @@ require("clipboard-tool")
 require("glab-toggl-track")
 require("quick-search")
 require("text-transformation")
+require("wallpaper-chooser")
 require("windows")
 require("workspaces")
 

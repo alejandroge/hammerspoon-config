@@ -1,3 +1,6 @@
 [submodule "Spoons/GlabToggl.spoon"]
 	path = Spoons/GlabToggl.spoon
 	url = git@github.com:alejandroge/GlabToggl.spoon.git
+[submodule "Spoons/WallpaperChooser.spoon"]
+	path = Spoons/WallpaperChooser.spoon
+	url = git@github.com:alejandroge/WallpaperChooser.spoon.git
