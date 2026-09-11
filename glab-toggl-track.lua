@@ -4,6 +4,7 @@ local secrets = dofile(os.getenv("HOME") .. "/.hammerspoon/secrets.lua")
 spoon.GlabToggl:configure({
     assignee            = "alejandro.ge",
     togglApiToken       = secrets.togglApiToken,
+    togglOrganizationId = secrets.togglOrganizationId,
     togglWorkspaceId    = secrets.togglWorkspaceId,
     gitlabToken         = secrets.gitlabToken,
     idleReminderStartTime = "09:00",
