@@ -1,5 +1,4 @@
 return {
-    wifiHome = "SSID for Home network",
     email = "email@example.com",
     address = "Your Home Address",
     togglApiToken = "your_toggl_2_api_key_here",

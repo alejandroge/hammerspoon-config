@@ -13,6 +13,11 @@ like this (or just copy the `secrets.example.lua` file and fill in your own valu
 
 ```lua
 return {
-  wifiHome = "SSID for Home network",
+  email = "email@example.com",
+  address = "Your Home Address",
+  togglApiToken = "your_toggl_2_api_key_here",
+  togglWorkspaceId = "your_toggl_workspace_id_here",
+  togglOrganizationId = "your_toggl_organization_id_here",
+  gitlabToken = "gitlab_personal_access_token_here",
 }
 ```
